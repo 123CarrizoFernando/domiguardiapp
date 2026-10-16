@@ -18,7 +18,8 @@ class SolicitudModel {
   final LatLng ubicacion;
   String estado;
   String? diagnosticoMedico;
-  String? medicoNombre; // <-- Variable declarada aquí
+  String? medicoNombre;
+  String? medicoAlias;
 
   SolicitudModel({
     required this.id,
@@ -38,10 +39,10 @@ class SolicitudModel {
     required this.ubicacion,
     this.estado = 'PENDIENTE',
     this.diagnosticoMedico,
-    this.medicoNombre, // <-- Agregada al constructor
+    this.medicoNombre,
+    this.medicoAlias,
   });
 
-  // Convierte la fila de Neon PostgreSQL a nuestro objeto de Flutter
   factory SolicitudModel.fromJson(Map<String, dynamic> json) {
     return SolicitudModel(
       id: json['id'].toString(),
@@ -66,6 +67,7 @@ class SolicitudModel {
       estado: json['estado'] ?? 'PENDIENTE',
       diagnosticoMedico: json['diagnostico_medico'],
       medicoNombre: json['medico_nombre'],
+      medicoAlias: json['medico_alias'],
     );
   }
 

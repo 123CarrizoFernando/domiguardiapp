@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -17,10 +19,12 @@ class DoctorDashboardScreen extends StatefulWidget {
 }
 
 class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
-  bool _disponible = false;
+  bool _disponible = true;
   bool _cargandoServidor = false;
   bool _filtroPorKm = true;
-  int _radioKm = 5;
+  int _radioKm = 10;
+  Timer? _autoRefreshTimer;
+
   final List<int> _radiosDisponibles = [1, 3, 5, 10, 15];
   final Set<String> _barriosSeleccionados = {
     'Centro',
@@ -33,74 +37,43 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
   };
 
   final LatLng _posicionMedico = const LatLng(-24.7859, -65.4117);
+  final List<SolicitudModel> _solicitudes = [];
 
-  // Solicitudes por defecto (se reemplazan automáticamente si el servidor Node.js está encendido)
-  final List<SolicitudModel> _solicitudes = [
-    SolicitudModel(
-      id: 'SOL-101',
-      nombrePaciente: 'María Elena Gómez',
-      telefonoPaciente: '+5493875112233',
-      paraQuien: 'Familiar (Madre / padre)',
-      domicilio: '1 de Mayo 450, Centro',
-      referenciasCasa: 'Portón negro, timbre 2',
-      barrio: 'Centro',
-      horario: 'Lo antes posible',
-      motivo: 'Fiebre / malestar',
-      observacionesSintomas: 'Fiebre de 38.5°C desde anoche y dolor corporal.',
-      distanciaKm: 1.8,
-      tiempo: 'Hace 4 min',
-      ubicacion: const LatLng(-24.7915, -65.4160),
-    ),
-    SolicitudModel(
-      id: 'SOL-102',
-      nombrePaciente: 'Lucas Figueroa',
-      telefonoPaciente: '+5493875445566',
-      paraQuien: 'Paciente titular',
-      domicilio: 'Los Álamos 230, Tres Cerritos',
-      referenciasCasa: 'Casa esquina rejas blancas',
-      barrio: 'Tres Cerritos',
-      horario: 'Lo antes posible',
-      motivo: 'Dolor y malestar',
-      observacionesSintomas: 'Dolor abdominal agudo luego de cenar.',
-      distanciaKm: 3.2,
-      tiempo: 'Hace 9 min',
-      ubicacion: const LatLng(-24.7695, -65.3942),
-    ),
-    SolicitudModel(
-      id: 'SOL-103',
-      nombrePaciente: 'Roberto Sánchez',
-      telefonoPaciente: '+5493875778899',
-      paraQuien: 'Familiar (Abuelo / abuela)',
-      domicilio: 'Av. Savio 1100, Grand Bourg',
-      referenciasCasa: 'Dúplex 4, timbre superior',
-      barrio: 'Grand Bourg',
-      horario: 'Hoy · 18:00–20:00',
-      motivo: 'Atención de adulto mayor',
-      observacionesSintomas: 'Control de presión arterial y auscultación.',
-      distanciaKm: 4.6,
-      tiempo: 'Hace 12 min',
-      ubicacion: const LatLng(-24.7812, -65.4485),
-    ),
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _cargarDesdeServidor();
+    _autoRefreshTimer = Timer.periodic(const Duration(seconds: 8), (_) {
+      if (_disponible && mounted) {
+        _cargarDesdeServidor(silencioso: true);
+      }
+    });
+  }
 
-  Future<void> _cargarDesdeServidor() async {
-    setState(() => _cargandoServidor = true);
+  @override
+  void dispose() {
+    _autoRefreshTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _cargarDesdeServidor({bool silencioso = false}) async {
+    if (!silencioso) setState(() => _cargandoServidor = true);
     final remotas = await ApiService.obtenerSolicitudesPendientes();
     if (!mounted) return;
 
     setState(() {
       _cargandoServidor = false;
-      if (remotas.isNotEmpty) {
-        _solicitudes
-          ..clear()
-          ..addAll(remotas);
-      }
+      _solicitudes
+        ..clear()
+        ..addAll(remotas);
     });
   }
 
-  Future<void> _aceptarVisita(SolicitudModel s) async {
-    await ApiService.actualizarEstado(s.id, 'ACEPTADA');
-    s.estado = 'ACEPTADA';
+  Future<void> _abrirOAceptarVisita(SolicitudModel s) async {
+    if (s.estado == 'PENDIENTE') {
+      await ApiService.actualizarEstado(s.id, 'ACEPTADA');
+      s.estado = 'ACEPTADA';
+    }
     if (!mounted) return;
 
     await Navigator.push(
@@ -109,7 +82,6 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
         builder: (_) => VisitTrackingScreen(esVistaMedico: true, solicitud: s),
       ),
     );
-    // Al volver del seguimiento, refresca la lista desde Neon
     if (_disponible) {
       _cargarDesdeServidor();
     }
@@ -118,8 +90,13 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final nombreDr = ApiService.usuarioLogueado?['nombre'] ?? 'Médico';
 
-    final solicitudesFiltradas = _solicitudes.where((s) {
+    final enCursoList = _solicitudes
+        .where((s) => s.estado != 'PENDIENTE')
+        .toList();
+    final pendientesFiltradas = _solicitudes.where((s) {
+      if (s.estado != 'PENDIENTE') return false;
       if (_filtroPorKm) {
         return s.distanciaKm <= _radioKm;
       } else {
@@ -129,9 +106,9 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          'Panel Médico',
-          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+        title: Text(
+          'Dr. $nombreDr',
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
         ),
         actions: [
           if (_disponible)
@@ -144,7 +121,7 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
                     )
                   : Icon(Icons.refresh, color: colorScheme.primary),
               tooltip: 'Sincronizar pedidos',
-              onPressed: _cargarDesdeServidor,
+              onPressed: () => _cargarDesdeServidor(),
             ),
           IconButton(
             icon: Icon(
@@ -166,6 +143,7 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
             icon: const Icon(Icons.logout_rounded, color: Colors.redAccent),
             tooltip: 'Cerrar sesión',
             onPressed: () {
+              ApiService.usuarioLogueado = null;
               Navigator.pushAndRemoveUntil(
                 context,
                 MaterialPageRoute(builder: (_) => const LoginScreen()),
@@ -181,13 +159,6 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Administrá tu disponibilidad y revisá las solicitudes cercanas.',
-              style: TextStyle(color: Colors.grey),
-            ),
-            const SizedBox(height: 16),
-
-            // Switch de Disponibilidad
             Card(
               child: SwitchListTile(
                 secondary: CircleAvatar(
@@ -205,8 +176,8 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
                 ),
                 subtitle: Text(
                   _disponible
-                      ? 'En línea · Recibiendo pedidos en vivo'
-                      : 'Activá la disponibilidad para ver solicitudes.',
+                      ? 'En línea · Buscando pacientes en Salta'
+                      : 'Fuera de línea',
                 ),
                 value: _disponible,
                 onChanged: (v) {
@@ -217,7 +188,7 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
             ),
             const SizedBox(height: 16),
 
-            // Configuración de Cobertura
+            // Cobertura
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(20),
@@ -266,7 +237,6 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
                       ],
                     ),
                     const SizedBox(height: 20),
-
                     if (_filtroPorKm) ...[
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -315,11 +285,6 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
                         }).toList(),
                       ),
                     ] else ...[
-                      const Text(
-                        'Seleccioná los barrios donde atendés:',
-                        style: TextStyle(color: Colors.grey, fontSize: 13),
-                      ),
-                      const SizedBox(height: 12),
                       Wrap(
                         spacing: 8,
                         runSpacing: 8,
@@ -349,18 +314,20 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
             ),
             const SizedBox(height: 16),
 
-            // Contadores de estado
             Row(
               children: [
                 Expanded(
                   child: _MetricBox(
-                    label: 'Solicitudes en zona',
-                    value: _disponible ? '${solicitudesFiltradas.length}' : '—',
+                    label: 'Pendientes en zona',
+                    value: _disponible ? '${pendientesFiltradas.length}' : '—',
                   ),
                 ),
                 const SizedBox(width: 12),
-                const Expanded(
-                  child: _MetricBox(label: 'En curso', value: '0'),
+                Expanded(
+                  child: _MetricBox(
+                    label: 'En curso',
+                    value: '${enCursoList.length}',
+                  ),
                 ),
                 const SizedBox(width: 12),
                 const Expanded(
@@ -370,7 +337,6 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
             ),
             const SizedBox(height: 16),
 
-            // Mapa de radar celeste cuando está en línea
             if (_disponible) ...[
               ClipRRect(
                 borderRadius: BorderRadius.circular(16),
@@ -380,7 +346,7 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
                   child: FlutterMap(
                     options: MapOptions(
                       initialCenter: _posicionMedico,
-                      initialZoom: 12.5,
+                      initialZoom: 12.2,
                     ),
                     children: [
                       TileLayer(
@@ -418,7 +384,7 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
                               ),
                             ),
                           ),
-                          ...solicitudesFiltradas.map(
+                          ...pendientesFiltradas.map(
                             (s) => Marker(
                               point: s.ubicacion,
                               width: 40,
@@ -439,6 +405,19 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
               const SizedBox(height: 20),
             ],
 
+            // Si tiene guardias aceptadas en curso, las muestra arriba de todo
+            if (enCursoList.isNotEmpty) ...[
+              const Text(
+                'Guardias en curso (Activas)',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
+              ...enCursoList.map(
+                (s) => _buildTarjetaSolicitud(s, colorScheme, esEnCurso: true),
+              ),
+              const SizedBox(height: 20),
+            ],
+
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -448,7 +427,7 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
                 ),
                 if (_disponible)
                   TextButton.icon(
-                    onPressed: _cargarDesdeServidor,
+                    onPressed: () => _cargarDesdeServidor(),
                     icon: const Icon(Icons.sync, size: 16),
                     label: const Text('Actualizar'),
                   ),
@@ -459,10 +438,7 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
             if (!_disponible)
               Card(
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 36,
-                    horizontal: 20,
-                  ),
+                  padding: const EdgeInsets.all(32),
                   child: Center(
                     child: Column(
                       children: [
@@ -479,12 +455,6 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
                             fontSize: 16,
                           ),
                         ),
-                        const SizedBox(height: 4),
-                        const Text(
-                          'Activá tu disponibilidad para ver solicitudes de pacientes en tu zona.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: Colors.grey),
-                        ),
                         const SizedBox(height: 16),
                         FilledButton(
                           onPressed: () {
@@ -498,108 +468,113 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
                   ),
                 ),
               )
-            else if (solicitudesFiltradas.isEmpty)
+            else if (_cargandoServidor)
+              const Padding(
+                padding: EdgeInsets.all(32),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (pendientesFiltradas.isEmpty)
               const Padding(
                 padding: EdgeInsets.all(24),
                 child: Center(
                   child: Text(
-                    'No hay pacientes dentro de ese rango. Probá ampliando los kilómetros.',
+                    'No hay solicitudes pendientes dentro de este radio en este momento.',
                     textAlign: TextAlign.center,
                   ),
                 ),
               )
             else
-              ...solicitudesFiltradas.map((s) {
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 14),
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.green.withValues(alpha: 0.15),
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: Text(
-                                '● ${s.horario}',
-                                style: const TextStyle(
-                                  color: Colors.green,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                            Text(
-                              '${s.tiempo} · \$30.000',
-                              style: const TextStyle(
-                                color: Colors.grey,
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          s.motivo,
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '📍 ${s.barrio} · a ${s.distanciaKm} km (${s.domicilio})',
-                          style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        Text(
-                          '👤 ${s.nombrePaciente} · ${s.paraQuien}',
-                          style: const TextStyle(
-                            color: Colors.grey,
-                            fontSize: 13,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: colorScheme.primary.withValues(alpha: 0.07),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            '🩺 Síntomas: "${s.observacionesSintomas}"',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontStyle: FontStyle.italic,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                        SizedBox(
-                          width: double.infinity,
-                          child: FilledButton(
-                            onPressed: () => _aceptarVisita(s),
-                            child: const Text('Aceptar visita →'),
-                          ),
-                        ),
-                      ],
+              ...pendientesFiltradas.map(
+                (s) => _buildTarjetaSolicitud(s, colorScheme, esEnCurso: false),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTarjetaSolicitud(
+    SolicitudModel s,
+    ColorScheme colorScheme, {
+    required bool esEnCurso,
+  }) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 14),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: (esEnCurso ? Colors.orange : Colors.green)
+                        .withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    esEnCurso ? '● EN CURSO (${s.estado})' : '● ${s.horario}',
+                    style: TextStyle(
+                      color: esEnCurso ? Colors.orange : Colors.green,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
-                );
-              }),
+                ),
+                Text(
+                  '\$${s.precio.toStringAsFixed(0)}',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              s.motivo,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '📍 ${s.barrio} · a ${s.distanciaKm} km (${s.domicilio})',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+            Text(
+              '👤 ${s.nombrePaciente} · ${s.paraQuien}',
+              style: const TextStyle(color: Colors.grey, fontSize: 13),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: colorScheme.primary.withValues(alpha: 0.07),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                '🩺 Síntomas: "${s.observacionesSintomas}"',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: () => _abrirOAceptarVisita(s),
+                child: Text(
+                  esEnCurso
+                      ? 'Retomar gestión de visita →'
+                      : 'Aceptar visita →',
+                ),
+              ),
+            ),
           ],
         ),
       ),

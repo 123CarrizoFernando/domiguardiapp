@@ -5,18 +5,22 @@ import 'package:http/http.dart' as http;
 import '../models/solicitud_model.dart';
 
 class ApiService {
-  // TU ENLACE DE RENDER OFICIAL
   static const String baseUrl = 'https://domiguardia-backend.onrender.com/api';
 
   static Map<String, dynamic>? usuarioLogueado;
 
   static Future<bool> login(String email, String password) async {
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/login'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'email': email, 'password': password}),
-      );
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/login'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'email': email.trim(),
+              'password': password.trim(),
+            }),
+          )
+          .timeout(const Duration(seconds: 30));
       if (response.statusCode == 200) {
         usuarioLogueado = jsonDecode(response.body);
         return true;
@@ -36,20 +40,22 @@ class ApiService {
     String? aliasCbu,
   }) async {
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/registro'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'nombre': nombre,
-          'email': email,
-          'password': password,
-          'rol': rol,
-          'telefono': telefono,
-          'matricula': matricula,
-          'especialidad': especialidad,
-          'alias_cbu': aliasCbu,
-        }),
-      );
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/registro'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'nombre': nombre.trim(),
+              'email': email.trim(),
+              'password': password.trim(),
+              'rol': rol,
+              'telefono': telefono.trim(),
+              'matricula': matricula?.trim(),
+              'especialidad': especialidad?.trim(),
+              'alias_cbu': aliasCbu?.trim(),
+            }),
+          )
+          .timeout(const Duration(seconds: 30));
       if (response.statusCode == 201) {
         usuarioLogueado = jsonDecode(response.body);
         return true;
@@ -60,9 +66,14 @@ class ApiService {
 
   static Future<List<SolicitudModel>> obtenerSolicitudesPendientes() async {
     try {
+      String url = '$baseUrl/solicitudes';
+      if (usuarioLogueado != null && usuarioLogueado!['rol'] == 'MEDICO') {
+        url += '?medico_id=${usuarioLogueado!['id']}';
+      }
+
       final response = await http
-          .get(Uri.parse('$baseUrl/solicitudes'))
-          .timeout(const Duration(seconds: 4));
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 25));
       if (response.statusCode == 200) {
         final List<dynamic> data = jsonDecode(response.body);
         return data.map((json) => SolicitudModel.fromJson(json)).toList();
@@ -73,7 +84,6 @@ class ApiService {
 
   static Future<SolicitudModel> crearSolicitud(SolicitudModel nueva) async {
     try {
-      // Le agregamos el paciente_id al JSON antes de enviarlo
       final jsonBody = nueva.toJson();
       if (usuarioLogueado != null) {
         jsonBody['paciente_id'] = usuarioLogueado!['id'];
@@ -85,7 +95,7 @@ class ApiService {
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode(jsonBody),
           )
-          .timeout(const Duration(seconds: 4));
+          .timeout(const Duration(seconds: 25));
 
       if (response.statusCode == 201) {
         return SolicitudModel.fromJson(jsonDecode(response.body));
@@ -100,28 +110,35 @@ class ApiService {
     String? diagnostico,
   }) async {
     try {
-      final body = {'estado': nuevoEstado, 'diagnostico_medico': diagnostico};
+      final Map<String, dynamic> body = {
+        'estado': nuevoEstado,
+        'diagnostico_medico': diagnostico,
+      };
 
-      // Si el médico acepta la visita, mandamos sus datos para que quede registrado
       if (nuevoEstado == 'ACEPTADA' &&
           usuarioLogueado != null &&
           usuarioLogueado!['rol'] == 'MEDICO') {
-        body['medico_id'] = usuarioLogueado!['id'].toString();
+        body['medico_id'] = usuarioLogueado!['id'];
         body['medico_nombre'] =
-            'Dr. ${usuarioLogueado!['nombre']} (${usuarioLogueado!['matricula']})';
+            'Dr. ${usuarioLogueado!['nombre']} (MP ${usuarioLogueado!['matricula'] ?? "S/N"})';
+        body['medico_alias'] = usuarioLogueado!['alias_cbu'];
       }
 
-      await http.patch(
-        Uri.parse('$baseUrl/solicitudes/$id/estado'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode(body),
-      );
+      await http
+          .patch(
+            Uri.parse('$baseUrl/solicitudes/$id/estado'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 20));
     } catch (_) {}
   }
 
   static Future<SolicitudModel?> consultarSolicitud(String id) async {
     try {
-      final response = await http.get(Uri.parse('$baseUrl/solicitudes/$id'));
+      final response = await http
+          .get(Uri.parse('$baseUrl/solicitudes/$id'))
+          .timeout(const Duration(seconds: 12));
       if (response.statusCode == 200) {
         return SolicitudModel.fromJson(jsonDecode(response.body));
       }
@@ -131,7 +148,6 @@ class ApiService {
 
   static Future<List<SolicitudModel>> obtenerHistorial() async {
     try {
-      // Ahora pedimos el historial enviando quién está logueado
       String url = '$baseUrl/historial';
       if (usuarioLogueado != null) {
         url +=
@@ -140,7 +156,7 @@ class ApiService {
 
       final response = await http
           .get(Uri.parse(url))
-          .timeout(const Duration(seconds: 4));
+          .timeout(const Duration(seconds: 25));
       if (response.statusCode == 200) {
         final List<dynamic> data = jsonDecode(response.body);
         return data.map((json) => SolicitudModel.fromJson(json)).toList();

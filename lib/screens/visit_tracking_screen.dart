@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -26,10 +27,13 @@ class VisitTrackingScreen extends StatefulWidget {
 class _VisitTrackingScreenState extends State<VisitTrackingScreen> {
   int _estadoActual = 0;
   String _informeMedicoFinal = '';
+  String? _nombreMedicoAsignado;
+  String? _aliasMedicoAsignado;
   Timer? _pollingTimer;
   final LatLng _inicioMedico = const LatLng(-24.7859, -65.4117);
 
   static const List<String> _codigosEstado = [
+    'PENDIENTE',
     'ACEPTADA',
     'EN_CAMINO',
     'EN_DOMICILIO',
@@ -37,6 +41,11 @@ class _VisitTrackingScreenState extends State<VisitTrackingScreen> {
   ];
 
   final List<Map<String, String>> _estados = [
+    {
+      'titulo': 'Buscando médico de guardia',
+      'subtitulo': 'Tu solicitud fue enviada. Aguardando que un profesional cercano la acepte.',
+      'botonMedico': 'Aceptar visita →',
+    },
     {
       'titulo': 'Visita aceptada',
       'subtitulo': 'El profesional confirmó la guardia y prepara su maletín.',
@@ -62,34 +71,35 @@ class _VisitTrackingScreenState extends State<VisitTrackingScreen> {
   @override
   void initState() {
     super.initState();
-    _sincronizarIndiceConEstado(widget.solicitud.estado);
-    if (widget.solicitud.diagnosticoMedico != null) {
-      _informeMedicoFinal = widget.solicitud.diagnosticoMedico!;
-    }
+    _sincronizarConModelo(widget.solicitud);
 
-    // El paciente consulta a Neon cada 3 segundos para ver si el médico avanzó
     if (!widget.esVistaMedico) {
-      _pollingTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+      _pollingTimer = Timer.periodic(const Duration(seconds: 4), (_) async {
         final actualizada = await ApiService.consultarSolicitud(
           widget.solicitud.id,
         );
         if (actualizada != null && mounted) {
           setState(() {
-            _sincronizarIndiceConEstado(actualizada.estado);
-            if (actualizada.diagnosticoMedico != null &&
-                actualizada.diagnosticoMedico!.isNotEmpty) {
-              _informeMedicoFinal = actualizada.diagnosticoMedico!;
-            }
+            _sincronizarConModelo(actualizada);
           });
         }
       });
     }
   }
 
-  void _sincronizarIndiceConEstado(String estadoDB) {
-    final idx = _codigosEstado.indexOf(estadoDB);
+  void _sincronizarConModelo(SolicitudModel mod) {
+    final idx = _codigosEstado.indexOf(mod.estado);
     if (idx != -1) {
       _estadoActual = idx;
+    }
+    if (mod.diagnosticoMedico != null && mod.diagnosticoMedico!.isNotEmpty) {
+      _informeMedicoFinal = mod.diagnosticoMedico!;
+    }
+    if (mod.medicoNombre != null && mod.medicoNombre!.isNotEmpty) {
+      _nombreMedicoAsignado = mod.medicoNombre;
+    }
+    if (mod.medicoAlias != null && mod.medicoAlias!.isNotEmpty) {
+      _aliasMedicoAsignado = mod.medicoAlias;
     }
   }
 
@@ -101,8 +111,8 @@ class _VisitTrackingScreenState extends State<VisitTrackingScreen> {
 
   LatLng get _posicionActualMedico {
     final destino = widget.solicitud.ubicacion;
-    if (_estadoActual == 0) return _inicioMedico;
-    if (_estadoActual == 1) {
+    if (_estadoActual <= 1) return _inicioMedico;
+    if (_estadoActual == 2) {
       return LatLng(
         (_inicioMedico.latitude + destino.latitude) / 2,
         (_inicioMedico.longitude + destino.longitude) / 2,
@@ -181,17 +191,14 @@ class _VisitTrackingScreenState extends State<VisitTrackingScreen> {
               ),
               const SizedBox(height: 6),
               const Text(
-                'Escribí el diagnóstico e indicaciones que le quedarán registradas al paciente:',
+                'Escribí el diagnóstico e indicaciones para el paciente:',
                 style: TextStyle(color: Colors.grey, fontSize: 13),
               ),
               const SizedBox(height: 12),
               TextField(
                 controller: evolucionCtrl,
                 maxLines: 4,
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
-                  hintText: 'Diagnóstico presuntivo e indicaciones...',
-                ),
+                decoration: const InputDecoration(border: OutlineInputBorder()),
               ),
               const SizedBox(height: 16),
               SizedBox(
@@ -206,7 +213,7 @@ class _VisitTrackingScreenState extends State<VisitTrackingScreen> {
                       _informeMedicoFinal = textoDiagnostico;
                       widget.solicitud.diagnosticoMedico = textoDiagnostico;
                       widget.solicitud.estado = 'FINALIZADA';
-                      _estadoActual = 3;
+                      _estadoActual = 4;
                     });
                     await ApiService.actualizarEstado(
                       widget.solicitud.id,
@@ -248,7 +255,6 @@ class _VisitTrackingScreenState extends State<VisitTrackingScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // MAPA DE SEGUIMIENTO EN TIEMPO REAL
             ClipRRect(
               borderRadius: BorderRadius.circular(16),
               child: SizedBox(
@@ -265,15 +271,16 @@ class _VisitTrackingScreenState extends State<VisitTrackingScreen> {
                           'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                       userAgentPackageName: 'com.domiguardia.salta',
                     ),
-                    PolylineLayer(
-                      polylines: [
-                        Polyline(
-                          points: [_posicionActualMedico, destino],
-                          color: colorScheme.primary,
-                          strokeWidth: 4.5,
-                        ),
-                      ],
-                    ),
+                    if (_estadoActual >= 1)
+                      PolylineLayer(
+                        polylines: [
+                          Polyline(
+                            points: [_posicionActualMedico, destino],
+                            color: colorScheme.primary,
+                            strokeWidth: 4.5,
+                          ),
+                        ],
+                      ),
                     MarkerLayer(
                       markers: [
                         Marker(
@@ -286,19 +293,20 @@ class _VisitTrackingScreenState extends State<VisitTrackingScreen> {
                             size: 38,
                           ),
                         ),
-                        Marker(
-                          point: _posicionActualMedico,
-                          width: 42,
-                          height: 42,
-                          child: CircleAvatar(
-                            backgroundColor: colorScheme.primary,
-                            child: const Icon(
-                              Icons.directions_car,
-                              color: Colors.white,
-                              size: 22,
+                        if (_estadoActual >= 1)
+                          Marker(
+                            point: _posicionActualMedico,
+                            width: 42,
+                            height: 42,
+                            child: CircleAvatar(
+                              backgroundColor: colorScheme.primary,
+                              child: const Icon(
+                                Icons.directions_car,
+                                color: Colors.white,
+                                size: 22,
+                              ),
                             ),
                           ),
-                        ),
                       ],
                     ),
                   ],
@@ -307,7 +315,6 @@ class _VisitTrackingScreenState extends State<VisitTrackingScreen> {
             ),
             const SizedBox(height: 12),
 
-            // Botones rápidos de acción
             Row(
               children: [
                 Expanded(
@@ -362,9 +369,7 @@ class _VisitTrackingScreenState extends State<VisitTrackingScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    finalizado
-                        ? 'ATENCIÓN COMPLETADA'
-                        : 'ESTADO ACTUAL (PASO ${_estadoActual + 1} DE 4)',
+                    finalizado ? 'ATENCIÓN COMPLETADA' : 'ESTADO ACTUAL',
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.bold,
@@ -385,6 +390,62 @@ class _VisitTrackingScreenState extends State<VisitTrackingScreen> {
                 ],
               ),
             ),
+
+            // Si el médico tiene Alias/CBU cargado, se lo muestra al paciente para transferir
+            if (_aliasMedicoAsignado != null &&
+                _aliasMedicoAsignado!.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: Colors.teal.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.teal.withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'ALIAS / CBU DEL PROFESIONAL PARA TRANSFERIR:',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.teal,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _aliasMedicoAsignado!,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.copy_rounded, color: Colors.teal),
+                      tooltip: 'Copiar Alias',
+                      onPressed: () {
+                        Clipboard.setData(
+                          ClipboardData(text: _aliasMedicoAsignado!),
+                        );
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Alias copiado al portapapeles'),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ],
 
             if (_informeMedicoFinal.isNotEmpty) ...[
               const SizedBox(height: 16),
@@ -430,7 +491,6 @@ class _VisitTrackingScreenState extends State<VisitTrackingScreen> {
             ],
             const SizedBox(height: 20),
 
-            // Línea de tiempo
             ...List.generate(_estados.length, (index) {
               final completado = index <= _estadoActual;
               final esActual = index == _estadoActual;
@@ -469,7 +529,6 @@ class _VisitTrackingScreenState extends State<VisitTrackingScreen> {
 
             const SizedBox(height: 16),
 
-            // Ficha de la guardia
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -500,7 +559,8 @@ class _VisitTrackingScreenState extends State<VisitTrackingScreen> {
                     const Divider(height: 16),
                     _infoRow(
                       'Profesional',
-                      'Dr. Martín Gómez (MP 4821)',
+                      _nombreMedicoAsignado ??
+                          'Aguardando médico de guardia...',
                     ),
                   ],
                 ),
@@ -508,9 +568,7 @@ class _VisitTrackingScreenState extends State<VisitTrackingScreen> {
             ),
             const SizedBox(height: 20),
 
-            // Lógica final del botón inferior
             if (widget.esVistaMedico)
-              // Si es médico, ve los botones para avanzar
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
@@ -528,7 +586,7 @@ class _VisitTrackingScreenState extends State<VisitTrackingScreen> {
                         : _estados[_estadoActual]['botonMedico']!,
                   ),
                   onPressed: () {
-                    if (_estadoActual == 2) {
+                    if (_estadoActual == 3) {
                       _abrirModalInformeMedico();
                     } else if (!finalizado) {
                       _avanzarPasoEstado();
@@ -539,7 +597,6 @@ class _VisitTrackingScreenState extends State<VisitTrackingScreen> {
                 ),
               )
             else if (finalizado)
-              // Si es paciente y ya terminó, solo ve el botón de volver
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
@@ -552,7 +609,6 @@ class _VisitTrackingScreenState extends State<VisitTrackingScreen> {
                 ),
               )
             else
-              // Si es paciente y está en curso, NO ve ningún botón engañoso, solo un aviso
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(16),
@@ -576,7 +632,7 @@ class _VisitTrackingScreenState extends State<VisitTrackingScreen> {
                     ),
                     const SizedBox(width: 12),
                     Text(
-                      'Esta pantalla se actualiza automáticamente.',
+                      'Sincronizando en tiempo real con el médico...',
                       style: TextStyle(
                         color: colorScheme.primary,
                         fontWeight: FontWeight.bold,
